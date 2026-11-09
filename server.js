@@ -39,7 +39,6 @@ app.use(cors({
 }));
 
 // --- 2. BODY PARSING ---
-// strict: false allows the parser to accept non-standard JSON payloads
 app.use(bodyParser.json({ limit: '10mb', strict: false }));
 app.use(bodyParser.urlencoded({ extended: true, limit: '10mb' }));
 
@@ -55,28 +54,22 @@ app.post('/api/orders/create', async (req, res) => {
   }
 });
 
-// --- INLINE STK PUSH ROUTE (Bulletproof parsing) ---
+// --- TEST ROUTE (Diagnostic) ---
+app.post('/api/stkpush-test', (req, res) => {
+  console.log("TEST ROUTE HIT! Body:", req.body);
+  res.status(200).json({ 
+    message: "Test route works!", 
+    receivedBody: req.body,
+    timestamp: new Date().toISOString()
+  });
+});
+
+// --- INLINE STK PUSH ROUTE ---
 app.post('/api/stkpush', async (req, res) => {
   try {
-    // 1. Manual body parsing to bypass Express/bodyParser conflicts
-    let body = {};
-    if (req.body && Object.keys(req.body).length > 0) {
-      body = req.body;
-    } else {
-      // If body is empty, read the raw stream manually
-      const buffers = [];
-      for await (const chunk of req) {
-        buffers.push(chunk);
-      }
-      const rawData = Buffer.concat(buffers).toString();
-      if (rawData) {
-        try { body = JSON.parse(rawData); } catch (e) { console.error("Raw parse error:", e); }
-      }
-    }
+    // Diagnostic log BEFORE anything else
+    console.log("STK ROUTE HIT! Raw Body:", req.body);
 
-    console.log("STK BODY RECEIVED:", body); // This will prove if data reaches the server
-
-    // 2. Load Xeco logic dynamically
     const { requestXecoflowJson, buildXecoflowStkPushUrl, getMissingXecoflowConfig } = await import('./api/_lib/xecoflow.js');
 
     const endpoint = buildXecoflowStkPushUrl();
@@ -85,9 +78,11 @@ app.post('/api/stkpush', async (req, res) => {
     if (!endpoint) missing.push("XECOFLOW_BASE_URL");
 
     if (missing.length) {
+      console.log("MISSING CONFIG:", missing);
       return res.status(500).json({ error: "STK proxy is not configured.", missing: [...new Set(missing)] });
     }
 
+    const body = req.body;
     const amount = Number(body.amount);
     const phone = (body.phone || body.phoneNumber || "").toString().trim();
     const reference = (body.reference || body.orderId || "").toString().trim();
@@ -102,6 +97,7 @@ app.post('/api/stkpush', async (req, res) => {
     const idempotencyKey = crypto.randomUUID();
 
     const payload = { amount, phone, reference, description, nonce, timestamp, idempotency_key: idempotencyKey };
+    console.log("SENDING PAYLOAD TO XECO:", payload);
 
     const data = await requestXecoflowJson(endpoint, {
       method: "POST",
@@ -109,6 +105,7 @@ app.post('/api/stkpush', async (req, res) => {
       sign: true
     });
 
+    console.log("XECO RESPONSE:", data);
     res.status(200).json(data);
   } catch (err) {
     console.error("CRITICAL ERROR in /api/stkpush:", err);
@@ -126,23 +123,13 @@ app.get('/api/download', async (req, res) => {
   try { await downloadHandler(req, res); } catch (err) { console.error("ERROR download:", err); res.status(500).json({error: err.message}); }
 });
 
-// --- ADMIN ROUTES (Handles GET, POST, PUT, DELETE automatically) ---
+// --- ADMIN ROUTES ---
 app.all('/api/admin/books', async (req, res) => {
-  try { 
-    await adminBooksHandler(req, res); 
-  } catch (err) { 
-    console.error(`ERROR admin books ${req.method}:`, err); 
-    res.status(500).json({error: err.message}); 
-  }
+  try { await adminBooksHandler(req, res); } catch (err) { console.error(`ERROR admin books ${req.method}:`, err); res.status(500).json({error: err.message}); }
 });
 
 app.all('/api/admin/orders', async (req, res) => {
-  try { 
-    await adminOrdersHandler(req, res); 
-  } catch (err) { 
-    console.error(`ERROR admin orders ${req.method}:`, err); 
-    res.status(500).json({error: err.message}); 
-  }
+  try { await adminOrdersHandler(req, res); } catch (err) { console.error(`ERROR admin orders ${req.method}:`, err); res.status(500).json({error: err.message}); }
 });
 
 // --- 4. START SERVER ---
