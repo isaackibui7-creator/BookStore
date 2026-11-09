@@ -4,10 +4,10 @@ import { fileURLToPath } from 'url';
 import path from 'path';
 import cors from 'cors';
 import bodyParser from 'body-parser';
+import crypto from 'crypto'; // Import crypto here for the STK push
 
 // Import your Vercel handlers directly
 import createOrderHandler from './api/orders/create.js';
-import stkPushHandler from './api/stkpush.js';
 import webhookHandler from './api/webhook.js';
 import downloadHandler from './api/download.js';
 import adminOrdersHandler from './api/admin/orders.js'; 
@@ -38,64 +38,78 @@ app.use(cors({
   credentials: true
 }));
 
-// --- 2. BODY PARSING ---
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
 
-// --- 3. MANUAL API ROUTING WITH ERROR CATCHING ---
+// --- 2. MANUAL API ROUTING ---
 
 app.post('/api/orders/create', async (req, res) => {
   try {
     await createOrderHandler(req, res);
   } catch (err) {
     console.error("CRITICAL ERROR in /api/orders/create:", err);
-    res.status(500).json({ error: err.message || "Internal Server Error in create order" });
+    res.status(500).json({ error: err.message || "Internal error" });
   }
 });
 
+// --- INLINE STK PUSH ROUTE ---
 app.post('/api/stkpush', async (req, res) => {
   try {
-    await stkPushHandler(req, res);
+    // Dynamic import of the xecoflow library
+    const { requestXecoflowJson, buildXecoflowStkPushUrl, getMissingXecoflowConfig } = await import('./api/_lib/xecoflow.js');
+
+    const endpoint = buildXecoflowStkPushUrl();
+    const missing = getMissingXecoflowConfig({ requirePayments: true });
+
+    if (!endpoint) missing.push("XECOFLOW_BASE_URL");
+
+    if (missing.length) {
+      return res.status(500).json({ error: "STK proxy is not configured.", missing: [...new Set(missing)] });
+    }
+
+    const body = req.body;
+    const amount = Number(body.amount);
+    const phone = (body.phone || body.phoneNumber || "").toString().trim();
+    const reference = (body.reference || body.orderId || "").toString().trim();
+    const description = (body.description || "Book Store Purchase").toString().trim();
+
+    if (!Number.isFinite(amount) || amount <= 0) return res.status(400).json({ error: "A valid amount is required." });
+    if (!phone) return res.status(400).json({ error: "Phone number is required." });
+    if (!reference) return res.status(400).json({ error: "Payment reference is required." });
+
+    const timestamp = Math.floor(Date.now() / 1000);
+    const nonce = crypto.randomUUID();
+    const idempotencyKey = crypto.randomUUID();
+
+    const payload = { amount, phone, reference, description, nonce, timestamp, idempotency_key: idempotencyKey };
+
+    const data = await requestXecoflowJson(endpoint, {
+      method: "POST",
+      body: payload,
+      sign: true
+    });
+
+    res.status(200).json(data);
   } catch (err) {
     console.error("CRITICAL ERROR in /api/stkpush:", err);
-    res.status(500).json({ error: err.message || "Internal Server Error in stkpush" });
+    res.status(500).json({ error: err.message || "Internal error in stkpush" });
   }
 });
 
 app.post('/api/webhook', async (req, res) => {
-  try {
-    await webhookHandler(req, res);
-  } catch (err) {
-    console.error("CRITICAL ERROR in /api/webhook:", err);
-    res.status(500).json({ error: err.message || "Internal Server Error in webhook" });
-  }
+  try { await webhookHandler(req, res); } catch (err) { console.error("ERROR webhook:", err); res.status(500).json({error: err.message}); }
 });
 
 app.get('/api/download', async (req, res) => {
-  try {
-    await downloadHandler(req, res);
-  } catch (err) {
-    console.error("CRITICAL ERROR in /api/download:", err);
-    res.status(500).json({ error: err.message || "Internal Server Error in download" });
-  }
+  try { await downloadHandler(req, res); } catch (err) { console.error("ERROR download:", err); res.status(500).json({error: err.message}); }
 });
 
 app.get('/api/admin/orders', async (req, res) => {
-  try {
-    await adminOrdersHandler(req, res);
-  } catch (err) {
-    console.error("CRITICAL ERROR in /api/admin/orders:", err);
-    res.status(500).json({ error: err.message || "Internal Server Error in admin orders" });
-  }
+  try { await adminOrdersHandler(req, res); } catch (err) { console.error("ERROR admin orders:", err); res.status(500).json({error: err.message}); }
 });
 
 app.get('/api/admin/books', async (req, res) => {
-  try {
-    await adminBooksHandler(req, res);
-  } catch (err) {
-    console.error("CRITICAL ERROR in /api/admin/books:", err);
-    res.status(500).json({ error: err.message || "Internal Server Error in admin books" });
-  }
+  try { await adminBooksHandler(req, res); } catch (err) { console.error("ERROR admin books:", err); res.status(500).json({error: err.message}); }
 });
 
 // --- 4. START SERVER ---
