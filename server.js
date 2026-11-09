@@ -38,6 +38,7 @@ app.use(cors({
   credentials: true
 }));
 
+// Increase limit for large book cover uploads
 app.use(bodyParser.json({ limit: '50mb' }));
 app.use(bodyParser.urlencoded({ extended: true, limit: '50mb' }));
 
@@ -106,19 +107,23 @@ app.get('/api/download', async (req, res) => {
   try { await downloadHandler(req, res); } catch (err) { console.error("ERROR download:", err); res.status(500).json({error: err.message}); }
 });
 
-// Admin Routes (Handles both GET for viewing and POST for uploading/editing)
-app.get('/api/admin/orders', async (req, res) => {
-  try { await adminOrdersHandler(req, res); } catch (err) { console.error("ERROR admin orders:", err); res.status(500).json({error: err.message}); }
-});
-app.post('/api/admin/orders', async (req, res) => {
-  try { await adminOrdersHandler(req, res); } catch (err) { console.error("ERROR admin orders POST:", err); res.status(500).json({error: err.message}); }
+// --- ADMIN ROUTES (Handles GET, POST, PUT, DELETE automatically) ---
+app.all('/api/admin/books', async (req, res) => {
+  try { 
+    await adminBooksHandler(req, res); 
+  } catch (err) { 
+    console.error(`ERROR admin books ${req.method}:`, err); 
+    res.status(500).json({error: err.message}); 
+  }
 });
 
-app.get('/api/admin/books', async (req, res) => {
-  try { await adminBooksHandler(req, res); } catch (err) { console.error("ERROR admin books:", err); res.status(500).json({error: err.message}); }
-});
-app.post('/api/admin/books', async (req, res) => {
-  try { await adminBooksHandler(req, res); } catch (err) { console.error("ERROR admin books POST:", err); res.status(500).json({error: err.message}); }
+app.all('/api/admin/orders', async (req, res) => {
+  try { 
+    await adminOrdersHandler(req, res); 
+  } catch (err) { 
+    console.error(`ERROR admin orders ${req.method}:`, err); 
+    res.status(500).json({error: err.message}); 
+  }
 });
 
 // --- 4. START SERVER ---
