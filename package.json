@@ -12,6 +12,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "body-parser": "^2.4.0",
     "cors": "^2.8.6",
     "express": "^5.3.0",
     "firebase": "^10.12.2",
