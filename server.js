@@ -18,8 +18,12 @@ const server = createServer(app, {
 // Serve your built frontend (Vite output)
 app.use(express.static(path.join(__dirname, 'dist')));
 
-// Fallback to index.html for React Router
-app.get('*', (req, res) => {
+// Fallback to index.html for React Router (Works in Express 4 and 5)
+app.use((req, res, next) => {
+  // If the request is for an API route and it reached here, it means the API route wasn't found
+  if (req.path.startsWith('/api')) {
+    return next(); 
+  }
   res.sendFile(path.join(__dirname, 'dist', 'index.html'));
 });
 
