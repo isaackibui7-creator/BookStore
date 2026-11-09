@@ -39,16 +39,80 @@ app.use(cors({
   credentials: true
 }));
 
-// --- 2. MANUAL API ROUTING ---
-// IMPORTANT: Do NOT use express.json() before these routes. 
-// The Vercel handlers need the raw stream to parse the body themselves.
+// --- 2. MANUAL API ROUTING WITH RAW BODY PARSING ---
+// We use express.raw({ type: '*/*' }) so the Vercel handlers can read the raw stream.
+// We then manually parse it so our fallback works if the Vercel parser fails.
 
-app.post('/api/orders/create', createOrderHandler);
-app.post('/api/stkpush', stkPushHandler);
-app.post('/api/webhook', webhookHandler);
-app.get('/api/download', downloadHandler);
-app.get('/api/admin/orders', adminOrdersHandler);
-app.get('/api/admin/books', adminBooksHandler);
+const rawBodyMiddleware = express.raw({ type: '*/*' });
+
+// Orders
+app.post('/api/orders/create', rawBodyMiddleware, async (req, res) => {
+  try {
+    // Fallback: If req.body is a Buffer, parse it to JSON manually
+    if (Buffer.isBuffer(req.body)) {
+      try { req.body = JSON.parse(req.body.toString()); } catch (e) { console.error("JSON parse failed", e); }
+    }
+    await createOrderHandler(req, res);
+  } catch (err) {
+    console.error("Error in createOrderHandler:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// M-Pesa STK Push
+app.post('/api/stkpush', rawBodyMiddleware, async (req, res) => {
+  try {
+    if (Buffer.isBuffer(req.body)) {
+      try { req.body = JSON.parse(req.body.toString()); } catch (e) { console.error("JSON parse failed", e); }
+    }
+    await stkPushHandler(req, res);
+  } catch (err) {
+    console.error("Error in stkPushHandler:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// M-Pesa Webhook
+app.post('/api/webhook', rawBodyMiddleware, async (req, res) => {
+  try {
+    if (Buffer.isBuffer(req.body)) {
+      try { req.body = JSON.parse(req.body.toString()); } catch (e) { console.error("JSON parse failed", e); }
+    }
+    await webhookHandler(req, res);
+  } catch (err) {
+    console.error("Error in webhookHandler:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// Downloads (GET requests don't need body parsing)
+app.get('/api/download', async (req, res) => {
+  try {
+    await downloadHandler(req, res);
+  } catch (err) {
+    console.error("Error in downloadHandler:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// Admin Routes (GET requests)
+app.get('/api/admin/orders', async (req, res) => {
+  try {
+    await adminOrdersHandler(req, res);
+  } catch (err) {
+    console.error("Error in adminOrdersHandler:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+app.get('/api/admin/books', async (req, res) => {
+  try {
+    await adminBooksHandler(req, res);
+  } catch (err) {
+    console.error("Error in adminBooksHandler:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
 
 // --- 3. START SERVER ---
 const PORT = process.env.PORT || 10000;
