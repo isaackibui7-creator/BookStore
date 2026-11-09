@@ -4,7 +4,7 @@ import { fileURLToPath } from 'url';
 import path from 'path';
 import cors from 'cors';
 import bodyParser from 'body-parser';
-import crypto from 'crypto'; // Import crypto here for the STK push
+import crypto from 'crypto'; 
 
 // Import your Vercel handlers directly
 import createOrderHandler from './api/orders/create.js';
@@ -38,11 +38,12 @@ app.use(cors({
   credentials: true
 }));
 
-app.use(bodyParser.json());
-app.use(bodyParser.urlencoded({ extended: true }));
+app.use(bodyParser.json({ limit: '50mb' }));
+app.use(bodyParser.urlencoded({ extended: true, limit: '50mb' }));
 
 // --- 2. MANUAL API ROUTING ---
 
+// Orders
 app.post('/api/orders/create', async (req, res) => {
   try {
     await createOrderHandler(req, res);
@@ -52,10 +53,9 @@ app.post('/api/orders/create', async (req, res) => {
   }
 });
 
-// --- INLINE STK PUSH ROUTE ---
+// --- INLINE STK PUSH ROUTE (For better error logging) ---
 app.post('/api/stkpush', async (req, res) => {
   try {
-    // Dynamic import of the xecoflow library
     const { requestXecoflowJson, buildXecoflowStkPushUrl, getMissingXecoflowConfig } = await import('./api/_lib/xecoflow.js');
 
     const endpoint = buildXecoflowStkPushUrl();
@@ -96,20 +96,29 @@ app.post('/api/stkpush', async (req, res) => {
   }
 });
 
+// Webhook
 app.post('/api/webhook', async (req, res) => {
   try { await webhookHandler(req, res); } catch (err) { console.error("ERROR webhook:", err); res.status(500).json({error: err.message}); }
 });
 
+// Downloads
 app.get('/api/download', async (req, res) => {
   try { await downloadHandler(req, res); } catch (err) { console.error("ERROR download:", err); res.status(500).json({error: err.message}); }
 });
 
+// Admin Routes (Handles both GET for viewing and POST for uploading/editing)
 app.get('/api/admin/orders', async (req, res) => {
   try { await adminOrdersHandler(req, res); } catch (err) { console.error("ERROR admin orders:", err); res.status(500).json({error: err.message}); }
+});
+app.post('/api/admin/orders', async (req, res) => {
+  try { await adminOrdersHandler(req, res); } catch (err) { console.error("ERROR admin orders POST:", err); res.status(500).json({error: err.message}); }
 });
 
 app.get('/api/admin/books', async (req, res) => {
   try { await adminBooksHandler(req, res); } catch (err) { console.error("ERROR admin books:", err); res.status(500).json({error: err.message}); }
+});
+app.post('/api/admin/books', async (req, res) => {
+  try { await adminBooksHandler(req, res); } catch (err) { console.error("ERROR admin books POST:", err); res.status(500).json({error: err.message}); }
 });
 
 // --- 4. START SERVER ---
