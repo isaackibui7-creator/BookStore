@@ -38,11 +38,12 @@ app.use(cors({
   credentials: true
 }));
 
-// Increase limit for large book cover uploads
-app.use(bodyParser.json({ limit: '50mb' }));
-app.use(bodyParser.urlencoded({ extended: true, limit: '50mb' }));
+// --- 2. BODY PARSING ---
+// strict: false allows the parser to accept non-standard JSON payloads
+app.use(bodyParser.json({ limit: '10mb', strict: false }));
+app.use(bodyParser.urlencoded({ extended: true, limit: '10mb' }));
 
-// --- 2. MANUAL API ROUTING ---
+// --- 3. MANUAL API ROUTING ---
 
 // Orders
 app.post('/api/orders/create', async (req, res) => {
@@ -54,9 +55,28 @@ app.post('/api/orders/create', async (req, res) => {
   }
 });
 
-// --- INLINE STK PUSH ROUTE (For better error logging) ---
+// --- INLINE STK PUSH ROUTE (Bulletproof parsing) ---
 app.post('/api/stkpush', async (req, res) => {
   try {
+    // 1. Manual body parsing to bypass Express/bodyParser conflicts
+    let body = {};
+    if (req.body && Object.keys(req.body).length > 0) {
+      body = req.body;
+    } else {
+      // If body is empty, read the raw stream manually
+      const buffers = [];
+      for await (const chunk of req) {
+        buffers.push(chunk);
+      }
+      const rawData = Buffer.concat(buffers).toString();
+      if (rawData) {
+        try { body = JSON.parse(rawData); } catch (e) { console.error("Raw parse error:", e); }
+      }
+    }
+
+    console.log("STK BODY RECEIVED:", body); // This will prove if data reaches the server
+
+    // 2. Load Xeco logic dynamically
     const { requestXecoflowJson, buildXecoflowStkPushUrl, getMissingXecoflowConfig } = await import('./api/_lib/xecoflow.js');
 
     const endpoint = buildXecoflowStkPushUrl();
@@ -68,7 +88,6 @@ app.post('/api/stkpush', async (req, res) => {
       return res.status(500).json({ error: "STK proxy is not configured.", missing: [...new Set(missing)] });
     }
 
-    const body = req.body;
     const amount = Number(body.amount);
     const phone = (body.phone || body.phoneNumber || "").toString().trim();
     const reference = (body.reference || body.orderId || "").toString().trim();
