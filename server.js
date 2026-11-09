@@ -15,17 +15,8 @@ const server = createServer(app, {
   dir: path.join(__dirname, 'api'),
 });
 
-// Serve your built frontend (Vite output)
-app.use(express.static(path.join(__dirname, 'dist')));
-
-// Fallback to index.html for React Router (Works in Express 4 and 5)
-app.use((req, res, next) => {
-  // If the request is for an API route and it reached here, it means the API route wasn't found
-  if (req.path.startsWith('/api')) {
-    return next(); 
-  }
-  res.sendFile(path.join(__dirname, 'dist', 'index.html'));
-});
+// NOTE: We removed the express.static and app.get('*') fallback 
+// because your frontend is hosted on Render's Static Site.
 
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, '0.0.0.0', () => {
