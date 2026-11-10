@@ -28,102 +28,40 @@ process.on('uncaughtException', (err) => {
 // --- 1. CORS ---
 app.use(cors());
 
-// --- 2. DIAGNOSTIC TEST ROUTES ---
-app.get('/api/test-xeco', async (req, res) => {
+// --- HELPER: Read raw stream body ---
+const getRawBody = async (req) => {
+  const buffers = [];
+  for await (const chunk of req) buffers.push(chunk);
+  const rawData = Buffer.concat(buffers).toString();
+  if (!rawData) return {};
   try {
-    const baseUrl = (process.env.XECOFLOW_BASE_URL || "").replace(/\/+$/, "");
-    const consumerKey = process.env.XECOFLOW_CONSUMER_KEY;
-    const consumerSecret = process.env.XECOFLOW_CONSUMER_SECRET;
-
-    if (!baseUrl || !consumerKey || !consumerSecret) {
-      return res.status(500).json({ error: "Missing env vars" });
-    }
-
-    const authString = Buffer.from(`${consumerKey}:${consumerSecret}`).toString('base64');
-    const tokenRes = await fetch(`${baseUrl}/api/v1/auth/token`, {
-      method: "POST",
-      headers: { "Authorization": `Basic ${authString}`, "Content-Type": "application/json" }
-    });
-
-    const tokenText = await tokenRes.text();
-    res.status(tokenRes.status).json({ status: tokenRes.status, body: tokenText });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
+    return JSON.parse(rawData);
+  } catch (e) {
+    console.error("❌ Failed to parse raw JSON:", rawData);
+    return {};
   }
-});
+};
 
-app.get('/api/test-stk', async (req, res) => {
-  try {
-    const baseUrl = (process.env.XECOFLOW_BASE_URL || "").replace(/\/+$/, "");
-    const consumerKey = process.env.XECOFLOW_CONSUMER_KEY;
-    const consumerSecret = process.env.XECOFLOW_CONSUMER_SECRET;
+// --- 2. ACTUAL PRODUCTION ROUTES ---
 
-    const authString = Buffer.from(`${consumerKey}:${consumerSecret}`).toString('base64');
-    const tokenRes = await fetch(`${baseUrl}/api/v1/auth/token`, {
-      method: "POST",
-      headers: { "Authorization": `Basic ${authString}`, "Content-Type": "application/json" }
-    });
-    const tokenData = await tokenRes.json();
-    const accessToken = tokenData.access_token;
-
-    const amount = 1; 
-    const phone = "254708050827"; 
-    const reference = "TEST-" + Date.now();
-    const timestamp = Math.floor(Date.now() / 1000);
-    const nonce = crypto.randomUUID();
-    const idempotencyKey = crypto.randomUUID();
-
-    const payload = { amount, phone, reference, description: "Test Payment", nonce, timestamp, idempotency_key: idempotencyKey };
-
-    const sortedKeys = Object.keys(payload).sort();
-    const sortedBody = {};
-    sortedKeys.forEach(k => sortedBody[k] = payload[k]);
-    const bodyString = JSON.stringify(sortedBody);
-    const signature = crypto.createHmac("sha256", consumerSecret).update(bodyString).digest("base64");
-
-    const stkRes = await fetch(`${baseUrl}/api/v1/payments/stkpush`, {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-        "X-Timestamp": timestamp.toString(),
-        "X-Nonce": nonce,
-        "X-Idempotency-Key": idempotencyKey,
-        "X-Signature": signature
-      },
-      body: bodyString
-    });
-
-    const stkText = await stkRes.text();
-    res.status(stkRes.status).json({ status: stkRes.status, response: stkText });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// --- 3. ACTUAL PRODUCTION ROUTES ---
-
-// Orders (Notice: We now manually read the body here too, since bodyParser is gone)
+// Orders (Now parses raw body manually)
 app.post('/api/orders/create', async (req, res) => {
-  try { await createOrderHandler(req, res); } catch (err) { res.status(500).json({ error: err.message }); }
+  try {
+    req.body = await getRawBody(req);
+    console.log("📦 ORDER CREATE BODY:", req.body); // Diagnostic log
+    
+    await createOrderHandler(req, res);
+  } catch (err) { 
+    console.error("🔥 Error in /api/orders/create:", err);
+    res.status(500).json({ error: err.message }); 
+  }
 });
 
-// --- PRODUCTION STK PUSH ROUTE (No bodyParser interference) ---
+// --- PRODUCTION STK PUSH ROUTE ---
 app.post('/api/stkpush', async (req, res) => {
   try {
     // 1. Read raw stream
-    const buffers = [];
-    for await (const chunk of req) buffers.push(chunk);
-    const rawData = Buffer.concat(buffers).toString();
-    
-    let body = {};
-    if (rawData) {
-      try { body = JSON.parse(rawData); } catch (e) { 
-        console.error("❌ FAILED TO PARSE RAW JSON:", rawData);
-        return res.status(400).json({ error: "Invalid JSON" }); 
-      }
-    }
-
+    const body = await getRawBody(req);
     console.log("🚀 STK ROUTE HIT! Parsed Body:", body);
 
     const baseUrl = (process.env.XECOFLOW_BASE_URL || "").replace(/\/+$/, "");
@@ -178,8 +116,6 @@ app.post('/api/stkpush', async (req, res) => {
     const bodyString = JSON.stringify(sortedBody);
     const signature = crypto.createHmac("sha256", consumerSecret).update(bodyString).digest("base64");
 
-    console.log("📤 SENDING TO XECO:", payload);
-
     // 5. Send STK Push
     const stkRes = await fetch(`${baseUrl}/api/v1/payments/stkpush`, {
       method: "POST",
@@ -195,7 +131,6 @@ app.post('/api/stkpush', async (req, res) => {
     });
 
     const stkText = await stkRes.text();
-    console.log("✅ XECO STK STATUS:", stkRes.status);
     console.log("✅ XECO STK RESPONSE:", stkText);
 
     let stkData;
@@ -213,23 +148,20 @@ app.post('/api/stkpush', async (req, res) => {
   }
 });
 
-// Webhook, Downloads, Admin
+// Webhook
 app.post('/api/webhook', async (req, res) => { 
   try {
-    // Webhook also needs raw body, so manually read it
-    const buffers = [];
-    for await (const chunk of req) buffers.push(chunk);
-    const rawData = Buffer.concat(buffers).toString();
-    req.body = rawData ? JSON.parse(rawData) : {};
+    req.body = await getRawBody(req);
     await webhookHandler(req, res); 
   } catch (err) { res.status(500).json({error: err.message}); } 
 });
 
+// Downloads & Admin
 app.get('/api/download', async (req, res) => { try { await downloadHandler(req, res); } catch (err) { res.status(500).json({error: err.message}); } });
 app.all('/api/admin/books', async (req, res) => { try { await adminBooksHandler(req, res); } catch (err) { res.status(500).json({error: err.message}); } });
 app.all('/api/admin/orders', async (req, res) => { try { await adminOrdersHandler(req, res); } catch (err) { res.status(500).json({error: err.message}); } });
 
-// --- 4. START SERVER ---
+// --- 3. START SERVER ---
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`API Server running on port ${PORT}`);
