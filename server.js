@@ -1,4 +1,3 @@
-// server.js (at project root)
 import express from 'express';
 import { fileURLToPath } from 'url';
 import path from 'path';
@@ -6,6 +5,7 @@ import cors from 'cors';
 import bodyParser from 'body-parser';
 import crypto from 'crypto'; 
 
+// Import your Vercel handlers
 import createOrderHandler from './api/orders/create.js';
 import webhookHandler from './api/webhook.js';
 import downloadHandler from './api/download.js';
@@ -25,93 +25,128 @@ process.on('uncaughtException', (err) => {
   console.error('🚨 UNCAUGHT EXCEPTION CAUGHT:', err);
 });
 
-// --- 1. CORS ---
-const allowedOrigins = [
-  'https://isaackkibuibooksofadvisoryinternational.co.ke',
-  'https://www.isaackkibuibooksofadvisoryinternational.co.ke',
-  'https://bookstore-kchh.onrender.com',
-  'http://localhost:5173'
-];
-
-app.use(cors({
-  origin: function (origin, callback) {
-    if (!origin) return callback(null, true);
-    if (allowedOrigins.indexOf(origin) === -1) return callback(new Error('CORS blocked'), false);
-    return callback(null, true);
-  },
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  credentials: true
-}));
-
-// --- 2. BODY PARSING ---
+// --- 1. CORS & BODY PARSING ---
+app.use(cors());
 app.use(bodyParser.json({ limit: '10mb', strict: false }));
 app.use(bodyParser.urlencoded({ extended: true, limit: '10mb' }));
 
-// --- 3. ACTUAL API ROUTES ---
-
-app.post('/api/orders/create', async (req, res) => {
+// --- 2. DIAGNOSTIC TEST ROUTES ---
+app.get('/api/test-xeco', async (req, res) => {
   try {
-    await createOrderHandler(req, res);
-  } catch (err) {
-    console.error("CRITICAL ERROR in /api/orders/create:", err);
-    res.status(500).json({ error: err.message || "Internal error" });
-  }
-});
-
-// --- DIRECT NATIVE FETCH STK PUSH ROUTE ---
-app.post('/api/stkpush', async (req, res) => {
-  try {
-    // 1. Manually read the raw stream
-    const buffers = [];
-    for await (const chunk of req) buffers.push(chunk);
-    const rawData = Buffer.concat(buffers).toString();
-    
-    let body = {};
-    if (rawData) {
-      try { body = JSON.parse(rawData); } catch (e) { return res.status(400).json({ error: "Invalid JSON payload" }); }
-    }
-
-    console.log("🚀 STK ROUTE HIT! Parsed Body:", body);
-
-    // 2. Fetch Xeco Config Directly from Environment
     const baseUrl = (process.env.XECOFLOW_BASE_URL || "").replace(/\/+$/, "");
     const consumerKey = process.env.XECOFLOW_CONSUMER_KEY;
     const consumerSecret = process.env.XECOFLOW_CONSUMER_SECRET;
-    const shortcode = process.env.XECO_BUSINESS_SHORTCODE;
 
     if (!baseUrl || !consumerKey || !consumerSecret) {
-      console.log("❌ MISSING XECO CONFIG");
-      return res.status(500).json({ error: "Missing Xeco configuration variables." });
+      return res.status(500).json({ error: "Missing env vars" });
     }
 
-    // 3. Get Xeco Access Token
-    console.log("🔑 Requesting Xeco Access Token...");
     const authString = Buffer.from(`${consumerKey}:${consumerSecret}`).toString('base64');
-    
-    // NOTE: Assuming standard /api/v1/auth/token endpoint based on your xecoflow.js file
-    const tokenUrl = `${baseUrl}/api/v1/auth/token`; 
-    const tokenRes = await fetch(tokenUrl, {
+    const tokenRes = await fetch(`${baseUrl}/api/v1/auth/token`, {
       method: "POST",
       headers: { "Authorization": `Basic ${authString}`, "Content-Type": "application/json" }
     });
 
     const tokenText = await tokenRes.text();
-    console.log("🔑 Token Response Status:", tokenRes.status);
-    console.log("🔑 Token Response Body:", tokenText);
+    res.status(tokenRes.status).json({ status: tokenRes.status, body: tokenText });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
-    if (!tokenRes.ok) {
-      return res.status(502).json({ error: "Xeco Auth Failed", details: tokenText });
+app.get('/api/test-stk', async (req, res) => {
+  try {
+    const baseUrl = (process.env.XECOFLOW_BASE_URL || "").replace(/\/+$/, "");
+    const consumerKey = process.env.XECOFLOW_CONSUMER_KEY;
+    const consumerSecret = process.env.XECOFLOW_CONSUMER_SECRET;
+
+    const authString = Buffer.from(`${consumerKey}:${consumerSecret}`).toString('base64');
+    const tokenRes = await fetch(`${baseUrl}/api/v1/auth/token`, {
+      method: "POST",
+      headers: { "Authorization": `Basic ${authString}`, "Content-Type": "application/json" }
+    });
+    const tokenData = await tokenRes.json();
+    const accessToken = tokenData.access_token;
+
+    const amount = 1; 
+    const phone = "254708050827"; 
+    const reference = "TEST-" + Date.now();
+    const timestamp = Math.floor(Date.now() / 1000);
+    const nonce = crypto.randomUUID();
+    const idempotencyKey = crypto.randomUUID();
+
+    const payload = { amount, phone, reference, description: "Test Payment", nonce, timestamp, idempotency_key: idempotencyKey };
+
+    const sortedKeys = Object.keys(payload).sort();
+    const sortedBody = {};
+    sortedKeys.forEach(k => sortedBody[k] = payload[k]);
+    const bodyString = JSON.stringify(sortedBody);
+    const signature = crypto.createHmac("sha256", consumerSecret).update(bodyString).digest("base64");
+
+    const stkRes = await fetch(`${baseUrl}/api/v1/payments/stkpush`, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+        "X-Timestamp": timestamp.toString(),
+        "X-Nonce": nonce,
+        "X-Idempotency-Key": idempotencyKey,
+        "X-Signature": signature
+      },
+      body: bodyString
+    });
+
+    const stkText = await stkRes.text();
+    res.status(stkRes.status).json({ status: stkRes.status, response: stkText });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// --- 3. ACTUAL PRODUCTION ROUTES ---
+
+// Orders
+app.post('/api/orders/create', async (req, res) => {
+  try { await createOrderHandler(req, res); } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// --- PRODUCTION STK PUSH ROUTE (Uses native fetch) ---
+app.post('/api/stkpush', async (req, res) => {
+  try {
+    // 1. Read raw stream
+    const buffers = [];
+    for await (const chunk of req) buffers.push(chunk);
+    const rawData = Buffer.concat(buffers).toString();
+    let body = {};
+    if (rawData) {
+      try { body = JSON.parse(rawData); } catch (e) { return res.status(400).json({ error: "Invalid JSON" }); }
     }
 
-    let tokenData;
-    try { tokenData = JSON.parse(tokenText); } catch(e) { return res.status(502).json({ error: "Invalid token JSON", details: tokenText }); }
+    console.log("🚀 STK ROUTE HIT! Parsed Body:", body);
+
+    const baseUrl = (process.env.XECOFLOW_BASE_URL || "").replace(/\/+$/, "");
+    const consumerKey = process.env.XECOFLOW_CONSUMER_KEY;
+    const consumerSecret = process.env.XECOFLOW_CONSUMER_SECRET;
+
+    if (!baseUrl || !consumerKey || !consumerSecret) {
+      return res.status(500).json({ error: "Missing Xeco configuration variables." });
+    }
+
+    // 2. Get Token
+    const authString = Buffer.from(`${consumerKey}:${consumerSecret}`).toString('base64');
+    const tokenRes = await fetch(`${baseUrl}/api/v1/auth/token`, {
+      method: "POST",
+      headers: { "Authorization": `Basic ${authString}`, "Content-Type": "application/json" }
+    });
+    const tokenData = await tokenRes.json();
     const accessToken = tokenData.access_token;
 
     if (!accessToken) {
-      return res.status(502).json({ error: "No access_token found in Xeco response", details: tokenData });
+      console.error("❌ AUTH FAILED:", tokenData);
+      return res.status(502).json({ error: "Xeco Auth Failed", details: tokenData });
     }
 
-    // 4. Prepare STK Push Payload
+    // 3. Prepare Payload
     const amount = Number(body.amount);
     const phone = (body.phone || body.phoneNumber || "").toString().trim();
     const reference = (body.reference || body.orderId || "").toString().trim();
@@ -124,20 +159,27 @@ app.post('/api/stkpush', async (req, res) => {
     const nonce = crypto.randomUUID();
     const idempotencyKey = crypto.randomUUID();
 
-    const payload = { amount, phone, reference, description: "Book Store Purchase", nonce, timestamp, idempotency_key: idempotencyKey };
-    
-    // 5. Generate Xeco HMAC Signature (Based on your xecoflow.js logic)
+    const payload = { 
+      amount, 
+      phone, 
+      reference, 
+      description: body.description || "Book Store Purchase", 
+      nonce, 
+      timestamp, 
+      idempotency_key: idempotencyKey 
+    };
+
+    // 4. Generate Signature
     const sortedKeys = Object.keys(payload).sort();
     const sortedBody = {};
     sortedKeys.forEach(k => sortedBody[k] = payload[k]);
     const bodyString = JSON.stringify(sortedBody);
     const signature = crypto.createHmac("sha256", consumerSecret).update(bodyString).digest("base64");
 
-    console.log("📤 SENDING STK PAYLOAD TO XECO:", payload);
+    console.log("📤 SENDING TO XECO:", payload);
 
-    // 6. Send STK Push Request
-    const stkUrl = `${baseUrl}/api/v1/payments/stkpush`;
-    const stkRes = await fetch(stkUrl, {
+    // 5. Send STK Push
+    const stkRes = await fetch(`${baseUrl}/api/v1/payments/stkpush`, {
       method: "POST",
       headers: {
         "Authorization": `Bearer ${accessToken}`,
@@ -164,8 +206,8 @@ app.post('/api/stkpush', async (req, res) => {
     return res.status(200).json(stkData);
 
   } catch (err) {
-    console.error("🔥 DIRECT FETCH CRASH:", err);
-    res.status(500).json({ error: err.message || "Internal server error" });
+    console.error("🔥 CRASH in /api/stkpush:", err);
+    res.status(500).json({ error: err.message });
   }
 });
 
