@@ -1,4 +1,4 @@
-import crypto from "crypto";
+import * as crypto from "crypto";
 
 const normalize = (value) => (value || "").toString().trim();
 const withNoTrailingSlash = (value) => normalize(value).replace(/\/+$/g, "");
