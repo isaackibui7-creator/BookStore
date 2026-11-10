@@ -38,7 +38,7 @@ const getRawBody = async (req) => {
     return JSON.parse(rawData);
   } catch (e) {
     console.error("❌ Failed to parse raw JSON:", rawData);
-    return {};
+    return { raw: rawData };
   }
 };
 
@@ -148,12 +148,18 @@ app.post('/api/stkpush', async (req, res) => {
   }
 });
 
-// Webhook
+// --- WEBHOOK ROUTE ---
 app.post('/api/webhook', async (req, res) => { 
   try {
     req.body = await getRawBody(req);
+    // THIS LOG IS CRITICAL TO SEE IF XECO IS HITTING YOUR SERVER
+    console.log("🔔 WEBHOOK HIT! Raw Body received from Xeco:", req.body); 
+    
     await webhookHandler(req, res); 
-  } catch (err) { res.status(500).json({error: err.message}); } 
+  } catch (err) { 
+    console.error("🔥 WEBHOOK CRASH:", err);
+    res.status(500).json({error: err.message}); 
+  } 
 });
 
 // Downloads & Admin

@@ -279,16 +279,19 @@ export default async function handler(req, res) {
 
   const payload = parseBody(req);
   const info = extractPaymentInfo(payload);
+  
+  console.log("[WEBHOOK] Received Payload:", JSON.stringify(payload));
 
   try {
     if (!admin.apps.length) {
       if (!process.env.FIREBASE_CLIENT_EMAIL || !process.env.FIREBASE_PRIVATE_KEY) {
-        throw new Error("Firebase credentials missing in Vercel environment variables.");
+        throw new Error("Firebase credentials missing in environment variables.");
       }
 
       admin.initializeApp({
         credential: admin.credential.cert({
-          projectId: process.env.VITE_FIREBASE_PROJECT_ID,
+          // FIXED: Changed from VITE_FIREBASE_PROJECT_ID to FIREBASE_PROJECT_ID
+          projectId: process.env.FIREBASE_PROJECT_ID,
           clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
           privateKey: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, "\n")
         })
