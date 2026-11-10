@@ -35,19 +35,14 @@ app.use(cors({
   credentials: true
 }));
 
-// --- 2. BODY PARSING ---
+// --- 2. BODY PARSING (Only for other routes) ---
 app.use(bodyParser.json({ limit: '10mb', strict: false }));
 app.use(bodyParser.urlencoded({ extended: true, limit: '10mb' }));
 
 // --- 3. DIAGNOSTIC TEST ROUTE ---
-// This route does absolutely nothing except prove the server is receiving data.
 app.post('/api/stkpush-test', (req, res) => {
   console.log("✅ TEST ROUTE HIT! Data received:", req.body);
-  res.status(200).json({ 
-    success: true, 
-    message: "The backend is receiving data perfectly!", 
-    received: req.body 
-  });
+  res.status(200).json({ success: true, message: "Backend works!", received: req.body });
 });
 
 // --- 4. ACTUAL API ROUTES ---
@@ -61,10 +56,28 @@ app.post('/api/orders/create', async (req, res) => {
   }
 });
 
-// --- INLINE STK PUSH ROUTE ---
+// --- BULLETPROOF STK PUSH ROUTE ---
+// We DO NOT use bodyParser here. We read the raw stream manually.
 app.post('/api/stkpush', async (req, res) => {
   try {
-    console.log("🚀 STK ROUTE HIT! Raw Body:", req.body);
+    // 1. Manually read the raw stream
+    const buffers = [];
+    for await (const chunk of req) {
+      buffers.push(chunk);
+    }
+    const rawData = Buffer.concat(buffers).toString();
+    
+    let body = {};
+    if (rawData) {
+      try {
+        body = JSON.parse(rawData);
+      } catch (e) {
+        console.error("Failed to parse raw JSON:", rawData);
+        return res.status(400).json({ error: "Invalid JSON payload" });
+      }
+    }
+
+    console.log("🚀 STK ROUTE HIT! Parsed Body:", body);
 
     const { requestXecoflowJson, buildXecoflowStkPushUrl, getMissingXecoflowConfig } = await import('./api/_lib/xecoflow.js');
 
@@ -78,7 +91,6 @@ app.post('/api/stkpush', async (req, res) => {
       return res.status(500).json({ error: "STK proxy is not configured.", missing: [...new Set(missing)] });
     }
 
-    const body = req.body;
     const amount = Number(body.amount);
     const phone = (body.phone || body.phoneNumber || "").toString().trim();
     const reference = (body.reference || body.orderId || "").toString().trim();
