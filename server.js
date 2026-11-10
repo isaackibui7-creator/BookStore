@@ -35,7 +35,7 @@ app.use(cors({
   credentials: true
 }));
 
-// --- 2. BODY PARSING (Only for other routes) ---
+// --- 2. BODY PARSING ---
 app.use(bodyParser.json({ limit: '10mb', strict: false }));
 app.use(bodyParser.urlencoded({ extended: true, limit: '10mb' }));
 
@@ -57,7 +57,6 @@ app.post('/api/orders/create', async (req, res) => {
 });
 
 // --- BULLETPROOF STK PUSH ROUTE ---
-// We DO NOT use bodyParser here. We read the raw stream manually.
 app.post('/api/stkpush', async (req, res) => {
   try {
     // 1. Manually read the raw stream
@@ -79,45 +78,56 @@ app.post('/api/stkpush', async (req, res) => {
 
     console.log("🚀 STK ROUTE HIT! Parsed Body:", body);
 
-    const { requestXecoflowJson, buildXecoflowStkPushUrl, getMissingXecoflowConfig } = await import('./api/_lib/xecoflow.js');
+    // 2. ISOLATED TRY/CATCH FOR XECO (Prevents silent crashes)
+    try {
+      const { requestXecoflowJson, buildXecoflowStkPushUrl, getMissingXecoflowConfig } = await import('./api/_lib/xecoflow.js');
 
-    const endpoint = buildXecoflowStkPushUrl();
-    const missing = getMissingXecoflowConfig({ requirePayments: true });
+      const endpoint = buildXecoflowStkPushUrl();
+      const missing = getMissingXecoflowConfig({ requirePayments: true });
 
-    if (!endpoint) missing.push("XECOFLOW_BASE_URL");
+      if (!endpoint) missing.push("XECOFLOW_BASE_URL");
 
-    if (missing.length) {
-      console.log("❌ MISSING CONFIG:", missing);
-      return res.status(500).json({ error: "STK proxy is not configured.", missing: [...new Set(missing)] });
+      if (missing.length) {
+        console.log("❌ MISSING CONFIG:", missing);
+        return res.status(500).json({ error: "STK proxy is not configured.", missing: [...new Set(missing)] });
+      }
+
+      const amount = Number(body.amount);
+      const phone = (body.phone || body.phoneNumber || "").toString().trim();
+      const reference = (body.reference || body.orderId || "").toString().trim();
+      const description = (body.description || "Book Store Purchase").toString().trim();
+
+      if (!Number.isFinite(amount) || amount <= 0) return res.status(400).json({ error: "A valid amount is required." });
+      if (!phone) return res.status(400).json({ error: "Phone number is required." });
+      if (!reference) return res.status(400).json({ error: "Payment reference is required." });
+
+      const timestamp = Math.floor(Date.now() / 1000);
+      const nonce = crypto.randomUUID();
+      const idempotencyKey = crypto.randomUUID();
+
+      const payload = { amount, phone, reference, description, nonce, timestamp, idempotency_key: idempotencyKey };
+      console.log("📤 SENDING TO XECO:", payload);
+
+      const data = await requestXecoflowJson(endpoint, {
+        method: "POST",
+        body: payload,
+        sign: true
+      });
+
+      console.log("✅ XECO RESPONSE SUCCESS:", data);
+      return res.status(200).json(data);
+
+    } catch (xecoError) {
+      console.error("🔥 XECO API ERROR CAUGHT:", xecoError);
+      return res.status(502).json({ 
+        error: "Payment gateway rejected the request", 
+        details: xecoError.message || "Unknown Xeco error"
+      });
     }
 
-    const amount = Number(body.amount);
-    const phone = (body.phone || body.phoneNumber || "").toString().trim();
-    const reference = (body.reference || body.orderId || "").toString().trim();
-    const description = (body.description || "Book Store Purchase").toString().trim();
-
-    if (!Number.isFinite(amount) || amount <= 0) return res.status(400).json({ error: "A valid amount is required." });
-    if (!phone) return res.status(400).json({ error: "Phone number is required." });
-    if (!reference) return res.status(400).json({ error: "Payment reference is required." });
-
-    const timestamp = Math.floor(Date.now() / 1000);
-    const nonce = crypto.randomUUID();
-    const idempotencyKey = crypto.randomUUID();
-
-    const payload = { amount, phone, reference, description, nonce, timestamp, idempotency_key: idempotencyKey };
-    console.log("📤 SENDING TO XECO:", payload);
-
-    const data = await requestXecoflowJson(endpoint, {
-      method: "POST",
-      body: payload,
-      sign: true
-    });
-
-    console.log("✅ XECO RESPONSE:", data);
-    res.status(200).json(data);
   } catch (err) {
-    console.error("🔥 CRITICAL ERROR in /api/stkpush:", err);
-    res.status(500).json({ error: err.message || "Internal error in stkpush" });
+    console.error("🔥 SERVER ERROR in /api/stkpush:", err);
+    res.status(500).json({ error: err.message || "Internal server error" });
   }
 });
 
