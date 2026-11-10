@@ -6,7 +6,6 @@ import cors from 'cors';
 import bodyParser from 'body-parser';
 import crypto from 'crypto'; 
 
-// Import your Vercel handlers directly
 import createOrderHandler from './api/orders/create.js';
 import webhookHandler from './api/webhook.js';
 import downloadHandler from './api/download.js';
@@ -18,7 +17,7 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 
-// --- 1. CORS CONFIGURATION ---
+// --- 1. CORS ---
 const allowedOrigins = [
   'https://isaackkibuibooksofadvisoryinternational.co.ke',
   'https://www.isaackkibuibooksofadvisoryinternational.co.ke',
@@ -29,9 +28,7 @@ const allowedOrigins = [
 app.use(cors({
   origin: function (origin, callback) {
     if (!origin) return callback(null, true);
-    if (allowedOrigins.indexOf(origin) === -1) {
-      return callback(new Error('CORS blocked'), false);
-    }
+    if (allowedOrigins.indexOf(origin) === -1) return callback(new Error('CORS blocked'), false);
     return callback(null, true);
   },
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
@@ -42,9 +39,19 @@ app.use(cors({
 app.use(bodyParser.json({ limit: '10mb', strict: false }));
 app.use(bodyParser.urlencoded({ extended: true, limit: '10mb' }));
 
-// --- 3. MANUAL API ROUTING ---
+// --- 3. DIAGNOSTIC TEST ROUTE ---
+// This route does absolutely nothing except prove the server is receiving data.
+app.post('/api/stkpush-test', (req, res) => {
+  console.log("✅ TEST ROUTE HIT! Data received:", req.body);
+  res.status(200).json({ 
+    success: true, 
+    message: "The backend is receiving data perfectly!", 
+    received: req.body 
+  });
+});
 
-// Orders
+// --- 4. ACTUAL API ROUTES ---
+
 app.post('/api/orders/create', async (req, res) => {
   try {
     await createOrderHandler(req, res);
@@ -54,21 +61,10 @@ app.post('/api/orders/create', async (req, res) => {
   }
 });
 
-// --- TEST ROUTE (Diagnostic) ---
-app.post('/api/stkpush-test', (req, res) => {
-  console.log("TEST ROUTE HIT! Body:", req.body);
-  res.status(200).json({ 
-    message: "Test route works!", 
-    receivedBody: req.body,
-    timestamp: new Date().toISOString()
-  });
-});
-
 // --- INLINE STK PUSH ROUTE ---
 app.post('/api/stkpush', async (req, res) => {
   try {
-    // Diagnostic log BEFORE anything else
-    console.log("STK ROUTE HIT! Raw Body:", req.body);
+    console.log("🚀 STK ROUTE HIT! Raw Body:", req.body);
 
     const { requestXecoflowJson, buildXecoflowStkPushUrl, getMissingXecoflowConfig } = await import('./api/_lib/xecoflow.js');
 
@@ -78,7 +74,7 @@ app.post('/api/stkpush', async (req, res) => {
     if (!endpoint) missing.push("XECOFLOW_BASE_URL");
 
     if (missing.length) {
-      console.log("MISSING CONFIG:", missing);
+      console.log("❌ MISSING CONFIG:", missing);
       return res.status(500).json({ error: "STK proxy is not configured.", missing: [...new Set(missing)] });
     }
 
@@ -97,7 +93,7 @@ app.post('/api/stkpush', async (req, res) => {
     const idempotencyKey = crypto.randomUUID();
 
     const payload = { amount, phone, reference, description, nonce, timestamp, idempotency_key: idempotencyKey };
-    console.log("SENDING PAYLOAD TO XECO:", payload);
+    console.log("📤 SENDING TO XECO:", payload);
 
     const data = await requestXecoflowJson(endpoint, {
       method: "POST",
@@ -105,34 +101,21 @@ app.post('/api/stkpush', async (req, res) => {
       sign: true
     });
 
-    console.log("XECO RESPONSE:", data);
+    console.log("✅ XECO RESPONSE:", data);
     res.status(200).json(data);
   } catch (err) {
-    console.error("CRITICAL ERROR in /api/stkpush:", err);
+    console.error("🔥 CRITICAL ERROR in /api/stkpush:", err);
     res.status(500).json({ error: err.message || "Internal error in stkpush" });
   }
 });
 
-// Webhook
-app.post('/api/webhook', async (req, res) => {
-  try { await webhookHandler(req, res); } catch (err) { console.error("ERROR webhook:", err); res.status(500).json({error: err.message}); }
-});
+// Webhook, Downloads, Admin
+app.post('/api/webhook', async (req, res) => { try { await webhookHandler(req, res); } catch (err) { res.status(500).json({error: err.message}); } });
+app.get('/api/download', async (req, res) => { try { await downloadHandler(req, res); } catch (err) { res.status(500).json({error: err.message}); } });
+app.all('/api/admin/books', async (req, res) => { try { await adminBooksHandler(req, res); } catch (err) { res.status(500).json({error: err.message}); } });
+app.all('/api/admin/orders', async (req, res) => { try { await adminOrdersHandler(req, res); } catch (err) { res.status(500).json({error: err.message}); } });
 
-// Downloads
-app.get('/api/download', async (req, res) => {
-  try { await downloadHandler(req, res); } catch (err) { console.error("ERROR download:", err); res.status(500).json({error: err.message}); }
-});
-
-// --- ADMIN ROUTES ---
-app.all('/api/admin/books', async (req, res) => {
-  try { await adminBooksHandler(req, res); } catch (err) { console.error(`ERROR admin books ${req.method}:`, err); res.status(500).json({error: err.message}); }
-});
-
-app.all('/api/admin/orders', async (req, res) => {
-  try { await adminOrdersHandler(req, res); } catch (err) { console.error(`ERROR admin orders ${req.method}:`, err); res.status(500).json({error: err.message}); }
-});
-
-// --- 4. START SERVER ---
+// --- 5. START SERVER ---
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`API Server running on port ${PORT}`);
