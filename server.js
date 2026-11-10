@@ -1,8 +1,8 @@
+// server.js (at project root)
 import express from 'express';
 import { fileURLToPath } from 'url';
 import path from 'path';
 import cors from 'cors';
-import bodyParser from 'body-parser';
 import crypto from 'crypto'; 
 
 // Import your Vercel handlers
@@ -25,10 +25,8 @@ process.on('uncaughtException', (err) => {
   console.error('🚨 UNCAUGHT EXCEPTION CAUGHT:', err);
 });
 
-// --- 1. CORS & BODY PARSING ---
+// --- 1. CORS ---
 app.use(cors());
-app.use(bodyParser.json({ limit: '10mb', strict: false }));
-app.use(bodyParser.urlencoded({ extended: true, limit: '10mb' }));
 
 // --- 2. DIAGNOSTIC TEST ROUTES ---
 app.get('/api/test-xeco', async (req, res) => {
@@ -105,21 +103,25 @@ app.get('/api/test-stk', async (req, res) => {
 
 // --- 3. ACTUAL PRODUCTION ROUTES ---
 
-// Orders
+// Orders (Notice: We now manually read the body here too, since bodyParser is gone)
 app.post('/api/orders/create', async (req, res) => {
   try { await createOrderHandler(req, res); } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// --- PRODUCTION STK PUSH ROUTE (Uses native fetch) ---
+// --- PRODUCTION STK PUSH ROUTE (No bodyParser interference) ---
 app.post('/api/stkpush', async (req, res) => {
   try {
     // 1. Read raw stream
     const buffers = [];
     for await (const chunk of req) buffers.push(chunk);
     const rawData = Buffer.concat(buffers).toString();
+    
     let body = {};
     if (rawData) {
-      try { body = JSON.parse(rawData); } catch (e) { return res.status(400).json({ error: "Invalid JSON" }); }
+      try { body = JSON.parse(rawData); } catch (e) { 
+        console.error("❌ FAILED TO PARSE RAW JSON:", rawData);
+        return res.status(400).json({ error: "Invalid JSON" }); 
+      }
     }
 
     console.log("🚀 STK ROUTE HIT! Parsed Body:", body);
@@ -212,7 +214,17 @@ app.post('/api/stkpush', async (req, res) => {
 });
 
 // Webhook, Downloads, Admin
-app.post('/api/webhook', async (req, res) => { try { await webhookHandler(req, res); } catch (err) { res.status(500).json({error: err.message}); } });
+app.post('/api/webhook', async (req, res) => { 
+  try {
+    // Webhook also needs raw body, so manually read it
+    const buffers = [];
+    for await (const chunk of req) buffers.push(chunk);
+    const rawData = Buffer.concat(buffers).toString();
+    req.body = rawData ? JSON.parse(rawData) : {};
+    await webhookHandler(req, res); 
+  } catch (err) { res.status(500).json({error: err.message}); } 
+});
+
 app.get('/api/download', async (req, res) => { try { await downloadHandler(req, res); } catch (err) { res.status(500).json({error: err.message}); } });
 app.all('/api/admin/books', async (req, res) => { try { await adminBooksHandler(req, res); } catch (err) { res.status(500).json({error: err.message}); } });
 app.all('/api/admin/orders', async (req, res) => { try { await adminOrdersHandler(req, res); } catch (err) { res.status(500).json({error: err.message}); } });
