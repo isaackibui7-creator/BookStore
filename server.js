@@ -4,6 +4,7 @@ import { fileURLToPath } from 'url';
 import path from 'path';
 import cors from 'cors';
 import crypto from 'crypto'; 
+import admin from 'firebase-admin';
 
 // Import your Vercel handlers
 import createOrderHandler from './api/orders/create.js';
@@ -170,6 +171,52 @@ app.post('/api/webhook', async (req, res) => {
     console.error("🔥 WEBHOOK CRASH:", err);
     res.status(500).json({error: err.message}); 
   } 
+});
+
+// --- NEW: STATUS ROUTE (For Frontend Polling) ---
+app.post('/api/payments/status', async (req, res) => {
+  try {
+    const body = await getRawBody(req);
+    const { orderId } = body;
+
+    if (!orderId) {
+      return res.status(400).json({ error: "Order ID required" });
+    }
+
+    // Initialize Firebase Admin if not already
+    if (!admin.apps.length) {
+      admin.initializeApp({
+        credential: admin.credential.cert({
+          projectId: process.env.FIREBASE_PROJECT_ID,
+          clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+          privateKey: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, "\n")
+        })
+      });
+    }
+
+    const db = admin.firestore();
+    const orderRef = db.collection("orders").doc(orderId);
+    const snap = await orderRef.get();
+
+    if (!snap.exists) {
+      return res.status(404).json({ error: "Order not found" });
+    }
+
+    const data = snap.data();
+    return res.status(200).json({
+      order: {
+        id: orderId,
+        status: data.status,
+        items: data.items,
+        total: data.total,
+        payment: data.payment
+      }
+    });
+
+  } catch (err) {
+    console.error("🔥 Error in /api/payments/status:", err);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // Downloads & Admin
