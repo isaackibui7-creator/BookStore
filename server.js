@@ -60,25 +60,21 @@ app.post('/api/orders/create', async (req, res) => {
 // --- DIRECT DARAJA STK PUSH ROUTE (No XecoFlow) ---
 app.post('/api/stkpush', async (req, res) => {
   try {
-    // 1. Read raw stream
     const body = await getRawBody(req);
     console.log("🚀 STK ROUTE HIT! Parsed Body:", body);
 
-    // 2. Isaac's Daraja Credentials
     const consumerKey = process.env.MPESA_CONSUMER_KEY;
     const consumerSecret = process.env.MPESA_CONSUMER_SECRET;
     const passkey = process.env.MPESA_PASSKEY;
     const callbackUrl = process.env.MPESA_CALLBACK_URL;
 
-    // 3. CRITICAL FIX: Short Code vs Till Number
-    const shortCode = "4563479"; // BusinessShortCode (Short Code from Daraja)
-    const tillNumber = "9036539"; // PartyB (Till Number from Daraja)
+    const shortCode = "4563479"; // BusinessShortCode
+    const tillNumber = "9036539"; // PartyB
 
     if (!consumerKey || !consumerSecret || !passkey || !callbackUrl) {
       return res.status(500).json({ error: "Missing Daraja configuration variables." });
     }
 
-    // 4. Get OAuth Token from Safaricom
     const authString = Buffer.from(`${consumerKey}:${consumerSecret}`).toString('base64');
     const tokenRes = await fetch('https://api.safaricom.co.ke/oauth/v1/generate?grant_type=client_credentials', {
       headers: { Authorization: `Basic ${authString}` }
@@ -91,7 +87,6 @@ app.post('/api/stkpush', async (req, res) => {
       return res.status(502).json({ error: "Daraja Auth Failed", details: tokenData });
     }
 
-    // 5. Prepare STK Push Payload
     const amount = Number(body.amount);
     const phone = (body.phone || body.phoneNumber || "").toString().trim();
     const reference = (body.reference || body.orderId || "").toString().trim();
@@ -100,21 +95,20 @@ app.post('/api/stkpush', async (req, res) => {
     if (!phone) return res.status(400).json({ error: "Phone number is required." });
     if (!reference) return res.status(400).json({ error: "Payment reference is required." });
 
-    // 6. Generate Timestamp and Password (using SHORT CODE)
     const now = new Date();
-    const eatOffset = 3 * 60 * 60 * 1000; // EAT is UTC+3
+    const eatOffset = 3 * 60 * 60 * 1000;
     const eatDate = new Date(now.getTime() + eatOffset);
     const timestamp = eatDate.toISOString().replace(/[-:T.Z]/g, '').slice(0, 14);
     const password = Buffer.from(`${shortCode}${passkey}${timestamp}`).toString('base64');
 
     const payload = {
-      BusinessShortCode: shortCode, // <-- Short Code
-      Password: password,           // <-- Password uses Short Code
+      BusinessShortCode: shortCode,
+      Password: password,
       Timestamp: timestamp,
       TransactionType: "CustomerBuyGoodsOnline",
       Amount: amount,
       PartyA: phone,
-      PartyB: tillNumber,           // <-- Till Number
+      PartyB: tillNumber,
       PhoneNumber: phone,
       CallBackURL: callbackUrl,
       AccountReference: reference,
@@ -123,7 +117,6 @@ app.post('/api/stkpush', async (req, res) => {
 
     console.log("📤 SENDING TO DARAJA:", JSON.stringify(payload, null, 2));
 
-    // 7. Send STK Push to Safaricom
     const stkRes = await fetch('https://api.safaricom.co.ke/mpesa/stkpush/v1/processrequest', {
       method: "POST",
       headers: {
@@ -165,7 +158,6 @@ app.post('/api/webhook', async (req, res) => {
   try {
     req.body = await getRawBody(req);
     console.log("🔔 WEBHOOK HIT! Raw Body received from Daraja:", req.body); 
-    
     await webhookHandler(req, res); 
   } catch (err) { 
     console.error("🔥 WEBHOOK CRASH:", err);
@@ -173,18 +165,25 @@ app.post('/api/webhook', async (req, res) => {
   } 
 });
 
-// --- NEW: STATUS ROUTE (For Frontend Polling) ---
+// --- STATUS ROUTE (For Frontend Polling) ---
 app.post('/api/payments/status', async (req, res) => {
+  console.log("🔍 [STATUS] Request received");
+  
   try {
     const body = await getRawBody(req);
     const { orderId } = body;
+    
+    console.log("🔍 [STATUS] Order ID:", orderId);
 
     if (!orderId) {
+      console.log("❌ [STATUS] No orderId provided");
       return res.status(400).json({ error: "Order ID required" });
     }
 
-    // Initialize Firebase Admin if not already
+    console.log("🔍 [STATUS] Checking Firebase init...");
+    
     if (!admin.apps.length) {
+      console.log("🔍 [STATUS] Initializing Firebase...");
       admin.initializeApp({
         credential: admin.credential.cert({
           projectId: process.env.FIREBASE_PROJECT_ID,
@@ -192,17 +191,23 @@ app.post('/api/payments/status', async (req, res) => {
           privateKey: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, "\n")
         })
       });
+      console.log("✅ [STATUS] Firebase initialized");
     }
 
     const db = admin.firestore();
     const orderRef = db.collection("orders").doc(orderId);
+    
+    console.log("🔍 [STATUS] Fetching order:", orderId);
     const snap = await orderRef.get();
 
     if (!snap.exists) {
+      console.log("❌ [STATUS] Order not found:", orderId);
       return res.status(404).json({ error: "Order not found" });
     }
 
     const data = snap.data();
+    console.log("✅ [STATUS] Order found. Status:", data.status);
+
     return res.status(200).json({
       order: {
         id: orderId,
@@ -214,7 +219,7 @@ app.post('/api/payments/status', async (req, res) => {
     });
 
   } catch (err) {
-    console.error("🔥 Error in /api/payments/status:", err);
+    console.error("🔥 [STATUS] Error:", err);
     res.status(500).json({ error: err.message });
   }
 });
