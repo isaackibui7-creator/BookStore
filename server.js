@@ -44,12 +44,11 @@ const getRawBody = async (req) => {
 
 // --- 2. ACTUAL PRODUCTION ROUTES ---
 
-// Orders (Now parses raw body manually)
+// Orders
 app.post('/api/orders/create', async (req, res) => {
   try {
     req.body = await getRawBody(req);
-    console.log("📦 ORDER CREATE BODY:", req.body); // Diagnostic log
-    
+    console.log("📦 ORDER CREATE BODY:", req.body);
     await createOrderHandler(req, res);
   } catch (err) { 
     console.error("🔥 Error in /api/orders/create:", err);
@@ -57,36 +56,38 @@ app.post('/api/orders/create', async (req, res) => {
   }
 });
 
-// --- PRODUCTION STK PUSH ROUTE ---
+// --- DIRECT DARAJA STK PUSH ROUTE (No XecoFlow) ---
 app.post('/api/stkpush', async (req, res) => {
   try {
     // 1. Read raw stream
     const body = await getRawBody(req);
     console.log("🚀 STK ROUTE HIT! Parsed Body:", body);
 
-    const baseUrl = (process.env.XECOFLOW_BASE_URL || "").replace(/\/+$/, "");
-    const consumerKey = process.env.XECOFLOW_CONSUMER_KEY;
-    const consumerSecret = process.env.XECOFLOW_CONSUMER_SECRET;
+    // 2. Isaac's Daraja Credentials
+    const consumerKey = process.env.MPESA_CONSUMER_KEY;
+    const consumerSecret = process.env.MPESA_CONSUMER_SECRET;
+    const shortCode = process.env.MPESA_SHORTCODE; // e.g., 4563479
+    const passkey = process.env.MPESA_PASSKEY;
+    const callbackUrl = process.env.MPESA_CALLBACK_URL; // e.g., https://bookstore-api-fgdv.onrender.com/api/webhook
 
-    if (!baseUrl || !consumerKey || !consumerSecret) {
-      return res.status(500).json({ error: "Missing Xeco configuration variables." });
+    if (!consumerKey || !consumerSecret || !shortCode || !passkey || !callbackUrl) {
+      return res.status(500).json({ error: "Missing Daraja configuration variables." });
     }
 
-    // 2. Get Token
+    // 3. Get OAuth Token from Safaricom
     const authString = Buffer.from(`${consumerKey}:${consumerSecret}`).toString('base64');
-    const tokenRes = await fetch(`${baseUrl}/api/v1/auth/token`, {
-      method: "POST",
-      headers: { "Authorization": `Basic ${authString}`, "Content-Type": "application/json" }
+    const tokenRes = await fetch('https://api.safaricom.co.ke/oauth/v1/generate?grant_type=client_credentials', {
+      headers: { Authorization: `Basic ${authString}` }
     });
     const tokenData = await tokenRes.json();
     const accessToken = tokenData.access_token;
 
     if (!accessToken) {
-      console.error("❌ AUTH FAILED:", tokenData);
-      return res.status(502).json({ error: "Xeco Auth Failed", details: tokenData });
+      console.error("❌ DARAJA AUTH FAILED:", tokenData);
+      return res.status(502).json({ error: "Daraja Auth Failed", details: tokenData });
     }
 
-    // 3. Prepare Payload
+    // 4. Prepare STK Push Payload
     const amount = Number(body.amount);
     const phone = (body.phone || body.phoneNumber || "").toString().trim();
     const reference = (body.reference || body.orderId || "").toString().trim();
@@ -95,52 +96,59 @@ app.post('/api/stkpush', async (req, res) => {
     if (!phone) return res.status(400).json({ error: "Phone number is required." });
     if (!reference) return res.status(400).json({ error: "Payment reference is required." });
 
-    const timestamp = Math.floor(Date.now() / 1000);
-    const nonce = crypto.randomUUID();
-    const idempotencyKey = crypto.randomUUID();
+    // 5. Generate Timestamp and Password
+    const now = new Date();
+    const eatOffset = 3 * 60 * 60 * 1000; // EAT is UTC+3
+    const eatDate = new Date(now.getTime() + eatOffset);
+    const timestamp = eatDate.toISOString().replace(/[-:T.Z]/g, '').slice(0, 14);
+    const password = Buffer.from(`${shortCode}${passkey}${timestamp}`).toString('base64');
 
-    const payload = { 
-      amount, 
-      phone, 
-      reference, 
-      description: body.description || "Book Store Purchase", 
-      nonce, 
-      timestamp, 
-      idempotency_key: idempotencyKey 
+    const payload = {
+      BusinessShortCode: shortCode,
+      Password: password,
+      Timestamp: timestamp,
+      TransactionType: "CustomerPayBillOnline", // Change to "CustomerBuyGoodsOnline" if using Till
+      Amount: amount,
+      PartyA: phone,
+      PartyB: shortCode,
+      PhoneNumber: phone,
+      CallBackURL: callbackUrl,
+      AccountReference: reference,
+      TransactionDesc: "Book Store Purchase"
     };
 
-    // 4. Generate Signature
-    const sortedKeys = Object.keys(payload).sort();
-    const sortedBody = {};
-    sortedKeys.forEach(k => sortedBody[k] = payload[k]);
-    const bodyString = JSON.stringify(sortedBody);
-    const signature = crypto.createHmac("sha256", consumerSecret).update(bodyString).digest("base64");
+    console.log("📤 SENDING TO DARAJA:", JSON.stringify(payload, null, 2));
 
-    // 5. Send STK Push
-    const stkRes = await fetch(`${baseUrl}/api/v1/payments/stkpush`, {
+    // 6. Send STK Push to Safaricom
+    const stkRes = await fetch('https://api.safaricom.co.ke/mpesa/stkpush/v1/processrequest', {
       method: "POST",
       headers: {
-        "Authorization": `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-        "X-Timestamp": timestamp.toString(),
-        "X-Nonce": nonce,
-        "X-Idempotency-Key": idempotencyKey,
-        "X-Signature": signature
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json"
       },
-      body: bodyString
+      body: JSON.stringify(payload)
     });
 
     const stkText = await stkRes.text();
-    console.log("✅ XECO STK RESPONSE:", stkText);
+    console.log("✅ DARAJA STK RESPONSE:", stkText);
 
     let stkData;
     try { stkData = JSON.parse(stkText); } catch(e) { stkData = { raw: stkText }; }
 
     if (!stkRes.ok) {
-      return res.status(502).json({ error: "Xeco rejected STK push", details: stkData });
+      return res.status(502).json({ error: "Daraja rejected STK push", details: stkData });
     }
 
-    return res.status(200).json(stkData);
+    return res.status(200).json({
+      success: true,
+      message: "STK Push sent successfully",
+      data: {
+        checkoutRequestId: stkData.CheckoutRequestID,
+        merchantRequestId: stkData.MerchantRequestID,
+        responseCode: stkData.ResponseCode,
+        responseDescription: stkData.ResponseDescription
+      }
+    });
 
   } catch (err) {
     console.error("🔥 CRASH in /api/stkpush:", err);
@@ -152,8 +160,7 @@ app.post('/api/stkpush', async (req, res) => {
 app.post('/api/webhook', async (req, res) => { 
   try {
     req.body = await getRawBody(req);
-    // THIS LOG IS CRITICAL TO SEE IF XECO IS HITTING YOUR SERVER
-    console.log("🔔 WEBHOOK HIT! Raw Body received from Xeco:", req.body); 
+    console.log("🔔 WEBHOOK HIT! Raw Body received from Daraja:", req.body); 
     
     await webhookHandler(req, res); 
   } catch (err) { 
