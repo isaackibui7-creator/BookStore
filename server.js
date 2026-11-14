@@ -99,6 +99,7 @@ app.post('/api/stkpush', async (req, res) => {
     const nonce = crypto.randomUUID();
     const idempotencyKey = crypto.randomUUID();
 
+    // ⚠️ ADDED: business_shortcode to route to your specific database entry
     const payload = { 
       amount, 
       phone, 
@@ -106,7 +107,8 @@ app.post('/api/stkpush', async (req, res) => {
       description: body.description || "Book Store Purchase", 
       nonce, 
       timestamp, 
-      idempotency_key: idempotencyKey 
+      idempotency_key: idempotencyKey,
+      business_shortcode: "4563479" // <--- CRITICAL FIX
     };
 
     // 4. Generate Signature
