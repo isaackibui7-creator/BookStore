@@ -66,15 +66,18 @@ app.post('/api/stkpush', async (req, res) => {
     // 2. Isaac's Daraja Credentials
     const consumerKey = process.env.MPESA_CONSUMER_KEY;
     const consumerSecret = process.env.MPESA_CONSUMER_SECRET;
-    const shortCode = process.env.MPESA_SHORTCODE; // e.g., 4563479
     const passkey = process.env.MPESA_PASSKEY;
-    const callbackUrl = process.env.MPESA_CALLBACK_URL; // e.g., https://bookstore-api-fgdv.onrender.com/api/webhook
+    const callbackUrl = process.env.MPESA_CALLBACK_URL;
 
-    if (!consumerKey || !consumerSecret || !shortCode || !passkey || !callbackUrl) {
+    // 3. Store Number vs Till Number (CRITICAL FIX)
+    const storeNumber = "9893532"; // BusinessShortCode (Store/HO Number)
+    const tillNumber = "9036539";  // PartyB (Till Number)
+
+    if (!consumerKey || !consumerSecret || !passkey || !callbackUrl) {
       return res.status(500).json({ error: "Missing Daraja configuration variables." });
     }
 
-    // 3. Get OAuth Token from Safaricom
+    // 4. Get OAuth Token from Safaricom
     const authString = Buffer.from(`${consumerKey}:${consumerSecret}`).toString('base64');
     const tokenRes = await fetch('https://api.safaricom.co.ke/oauth/v1/generate?grant_type=client_credentials', {
       headers: { Authorization: `Basic ${authString}` }
@@ -87,7 +90,7 @@ app.post('/api/stkpush', async (req, res) => {
       return res.status(502).json({ error: "Daraja Auth Failed", details: tokenData });
     }
 
-    // 4. Prepare STK Push Payload
+    // 5. Prepare STK Push Payload
     const amount = Number(body.amount);
     const phone = (body.phone || body.phoneNumber || "").toString().trim();
     const reference = (body.reference || body.orderId || "").toString().trim();
@@ -96,21 +99,21 @@ app.post('/api/stkpush', async (req, res) => {
     if (!phone) return res.status(400).json({ error: "Phone number is required." });
     if (!reference) return res.status(400).json({ error: "Payment reference is required." });
 
-    // 5. Generate Timestamp and Password
+    // 6. Generate Timestamp and Password (using STORE NUMBER)
     const now = new Date();
     const eatOffset = 3 * 60 * 60 * 1000; // EAT is UTC+3
     const eatDate = new Date(now.getTime() + eatOffset);
     const timestamp = eatDate.toISOString().replace(/[-:T.Z]/g, '').slice(0, 14);
-    const password = Buffer.from(`${shortCode}${passkey}${timestamp}`).toString('base64');
+    const password = Buffer.from(`${storeNumber}${passkey}${timestamp}`).toString('base64');
 
     const payload = {
-      BusinessShortCode: shortCode,
-      Password: password,
+      BusinessShortCode: storeNumber, // <-- Use Store Number
+      Password: password,             // <-- Password uses Store Number
       Timestamp: timestamp,
-      TransactionType: "CustomerBuyGoodsOnline", // Change to "CustomerBuyGoodsOnline" if using Till
+      TransactionType: "CustomerBuyGoodsOnline",
       Amount: amount,
       PartyA: phone,
-      PartyB: shortCode,
+      PartyB: tillNumber,             // <-- Use Till Number
       PhoneNumber: phone,
       CallBackURL: callbackUrl,
       AccountReference: reference,
@@ -119,7 +122,7 @@ app.post('/api/stkpush', async (req, res) => {
 
     console.log("📤 SENDING TO DARAJA:", JSON.stringify(payload, null, 2));
 
-    // 6. Send STK Push to Safaricom
+    // 7. Send STK Push to Safaricom
     const stkRes = await fetch('https://api.safaricom.co.ke/mpesa/stkpush/v1/processrequest', {
       method: "POST",
       headers: {
