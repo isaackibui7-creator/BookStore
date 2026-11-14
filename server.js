@@ -226,8 +226,28 @@ app.post('/api/payments/status', async (req, res) => {
 
 // Downloads & Admin
 app.get('/api/download', async (req, res) => { try { await downloadHandler(req, res); } catch (err) { res.status(500).json({error: err.message}); } });
-app.all('/api/admin/books', async (req, res) => { try { await adminBooksHandler(req, res); } catch (err) { res.status(500).json({error: err.message}); } });
-app.all('/api/admin/orders', async (req, res) => { try { await adminOrdersHandler(req, res); } catch (err) { res.status(500).json({error: err.message}); } });
+
+// Admin Books (Parses raw body for POST/PUT/DELETE)
+app.all('/api/admin/books', async (req, res) => { 
+  try { 
+    req.body = await getRawBody(req); 
+    await adminBooksHandler(req, res); 
+  } catch (err) { 
+    console.error("🔥 Error in /api/admin/books:", err);
+    res.status(500).json({error: err.message}); 
+  } 
+});
+
+// Admin Orders (Parses raw body for POST/PUT/DELETE)
+app.all('/api/admin/orders', async (req, res) => { 
+  try { 
+    req.body = await getRawBody(req); 
+    await adminOrdersHandler(req, res); 
+  } catch (err) { 
+    console.error("🔥 Error in /api/admin/orders:", err);
+    res.status(500).json({error: err.message}); 
+  } 
+});
 
 // --- 3. START SERVER ---
 const PORT = process.env.PORT || 10000;
