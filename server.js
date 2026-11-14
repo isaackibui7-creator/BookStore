@@ -107,7 +107,7 @@ app.post('/api/stkpush', async (req, res) => {
       BusinessShortCode: shortCode,
       Password: password,
       Timestamp: timestamp,
-      TransactionType: "CustomerPayBillOnline", // Change to "CustomerBuyGoodsOnline" if using Till
+      TransactionType: "CustomerBuyGoodsOnline", // Change to "CustomerBuyGoodsOnline" if using Till
       Amount: amount,
       PartyA: phone,
       PartyB: shortCode,
