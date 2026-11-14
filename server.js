@@ -69,9 +69,9 @@ app.post('/api/stkpush', async (req, res) => {
     const passkey = process.env.MPESA_PASSKEY;
     const callbackUrl = process.env.MPESA_CALLBACK_URL;
 
-    // 3. Store Number vs Till Number (CRITICAL FIX)
-    const storeNumber = "9893532"; // BusinessShortCode (Store/HO Number)
-    const tillNumber = "9036539";  // PartyB (Till Number)
+    // 3. CRITICAL FIX: Short Code vs Till Number
+    const shortCode = "4563479"; // BusinessShortCode (Short Code from Daraja)
+    const tillNumber = "9036539"; // PartyB (Till Number from Daraja)
 
     if (!consumerKey || !consumerSecret || !passkey || !callbackUrl) {
       return res.status(500).json({ error: "Missing Daraja configuration variables." });
@@ -99,21 +99,21 @@ app.post('/api/stkpush', async (req, res) => {
     if (!phone) return res.status(400).json({ error: "Phone number is required." });
     if (!reference) return res.status(400).json({ error: "Payment reference is required." });
 
-    // 6. Generate Timestamp and Password (using STORE NUMBER)
+    // 6. Generate Timestamp and Password (using SHORT CODE)
     const now = new Date();
     const eatOffset = 3 * 60 * 60 * 1000; // EAT is UTC+3
     const eatDate = new Date(now.getTime() + eatOffset);
     const timestamp = eatDate.toISOString().replace(/[-:T.Z]/g, '').slice(0, 14);
-    const password = Buffer.from(`${storeNumber}${passkey}${timestamp}`).toString('base64');
+    const password = Buffer.from(`${shortCode}${passkey}${timestamp}`).toString('base64');
 
     const payload = {
-      BusinessShortCode: storeNumber, // <-- Use Store Number
-      Password: password,             // <-- Password uses Store Number
+      BusinessShortCode: shortCode, // <-- Short Code
+      Password: password,           // <-- Password uses Short Code
       Timestamp: timestamp,
       TransactionType: "CustomerBuyGoodsOnline",
       Amount: amount,
       PartyA: phone,
-      PartyB: tillNumber,             // <-- Use Till Number
+      PartyB: tillNumber,           // <-- Till Number
       PhoneNumber: phone,
       CallBackURL: callbackUrl,
       AccountReference: reference,
